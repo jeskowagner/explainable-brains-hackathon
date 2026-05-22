@@ -49,6 +49,8 @@ challenging to interpret without specialist tools.
 
 ### 1. Fork and clone the repo
 
+First, click **Fork** at the top right of this page to copy the repo to your GitHub account.  
+Then, clone your fork:
 ```bash
 git clone https://github.com/explainable-brains/explainable-brains-hackathon.git
 cd explainable-brains-hackathon
