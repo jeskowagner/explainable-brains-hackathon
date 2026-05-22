@@ -7,7 +7,7 @@
 
 The brain is under pressure. Neurological and mental health conditions are among the most widespread and least solved problems in medicine. As populations age and daily life grows more cognitively demanding, the burden on patients, families, healthcare systems, and economies continues to grow.
 
-Vibraint builds tools to accelerate drug discovery for brain diseases. Their platform processes complex 3D microscopy scans of rodent brains into interactive, interpretable brain maps — making it possible to track how drugs distribute across brain regions, map neural activity patterns in response to treatment, and localise specific receptors and cell types at the scale and resolution that drug development demands.
+Vibraint ApS ([vibraint.dk](https://vibraint.dk)) builds tools to accelerate treatment discovery for brain diseases. Their platform processes complex 3D microscopy scans of rodent brains into interactive, interpretable brain maps making it possible to track how drugs distribute across brain regions, map neural activity patterns in response to treatment, and localise specific receptors and cell types at the scale and resolution that drug development demands.
 
 Drug development for brain diseases has one of the highest failure rates in medicine. The bottleneck is not the amount of data. It is the complexity that makes exploration and interpretation far from straightforward.
 
