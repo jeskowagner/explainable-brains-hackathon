@@ -58,9 +58,15 @@ cd explainable-brains-hackathon
 
 ### 2. Create the environment
 
+With conda:
 ```bash
 conda env create -f environment.yml
 conda activate explainable-brains
+```
+
+With pip:
+```bash
+pip install -r requirements.txt
 ```
 
 ### 3. Bucket access
