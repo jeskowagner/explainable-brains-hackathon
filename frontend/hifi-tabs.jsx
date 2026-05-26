@@ -178,18 +178,18 @@ function EmbeddingTab({ patchCount, setPatchCount, focusIndex, setFocusIndex }) 
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                 <span style={{ fontSize: 17, fontWeight: 600, color: T.ink, letterSpacing: -0.3 }}>
-                  {FOCUSED.id}
+                  {focused.id}
                 </span>
                 <ConditionDot c={focused.c} size={9} />
               </div>
               <div style={{ fontSize: 11, color: T.inkMuted, fontFamily: T.mono, marginTop: 2 }}>
-                {FOCUSED.brain} · {FOCUSED.condition.toLowerCase()}
+                {focused.brain} · {focused.condition.toLowerCase()}
               </div>
               <div style={{ fontSize: 11, color: T.inkFaint, fontFamily: T.mono, marginTop: 2 }}>
-                z {FOCUSED.z} · y₀ {FOCUSED.y} · x₀ {FOCUSED.x}
+                z {focused.z} · y₀ {focused.y} · x₀ {focused.x}
               </div>
               <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {FOCUSED.tags.map((t, i) => (
+                {(focused.tags || []).map((t, i) => (
                   <Chip key={i} variant={t.primary ? 'accent' : 'soft'} size="xs">
                     {t.name}
                     {t.score != null && (
@@ -217,7 +217,7 @@ function EmbeddingTab({ patchCount, setPatchCount, focusIndex, setFocusIndex }) 
               </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {FOCUSED.weights.map((w) => (
+              {(focused.weights || []).map((w) => (
                 <WeightBar key={w.key} label={w.key} val={w.val} accent={w.accent} />
               ))}
             </div>
@@ -229,9 +229,11 @@ function EmbeddingTab({ patchCount, setPatchCount, focusIndex, setFocusIndex }) 
               Justification
             </div>
             <div style={{ fontSize: 13, lineHeight: 1.5, color: T.ink }}>
-              Densest member of cluster {FOCUSED.cluster}. Removing this patch would leave
-              its corner of the embedding manifold the least-covered (Δ to nearest
-              selected: <b style={{ fontFamily: T.mono }}>{FOCUSED.deltaNN.toFixed(2)}</b>).
+              {focused.justification || (
+                <>Densest member of cluster {focused.cluster}. Removing this patch would leave
+                  its corner of the embedding manifold the least-covered (Δ to nearest
+                  selected: <b style={{ fontFamily: T.mono }}>{(focused.deltaNN ?? 0).toFixed(2)}</b>).</>
+              )}
             </div>
           </div>
 
@@ -390,7 +392,7 @@ function SelectionTab() {
                   }}
                 >
                   <div style={{ position: 'relative' }}>
-                    <PatchTile size="100%" seed={p.seed} density={p.density} />
+                    <PatchTile size="100%" seed={p.seed} density={p.density} imgSrc={p.img} />
                     <div style={{
                       position: 'absolute', top: 6, left: 6,
                       width: 18, height: 18, borderRadius: 4,
@@ -454,7 +456,7 @@ function SelectionTab() {
           padding: 18, borderBottom: `1px solid ${T.borderSoft}`,
           display: 'flex', alignItems: 'center', gap: 12,
         }}>
-          <PatchTile size={70} seed={active.seed} density={active.density} accent={T.accent} />
+          <PatchTile size={70} seed={active.seed} density={active.density} imgSrc={active.img} accent={T.accent} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 15, fontWeight: 600, color: T.ink, letterSpacing: -0.2 }}>
               {active.id}

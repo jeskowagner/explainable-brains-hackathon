@@ -22,6 +22,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from jesko.data import load_patches, patch_to_uint8  # noqa: E402
+from jesko.selection import (  # noqa: E402
+    compute_quality_weight, make_justifications, typiclust_select,
+)
 
 CACHE = ROOT / "cache"
 OUT   = ROOT / "frontend" / "data"
@@ -55,16 +58,30 @@ def main():
         for i in range(len(meta))
     ]
 
-    # ── stratified-random 200 picks: balance brain × condition ──
-    rng = np.random.default_rng(SEED)
-    per_brain = N_PICKS // 12
-    extra = N_PICKS - per_brain * 12
-    selected = []
-    for b in sorted(meta["brain_idx"].unique()):
-        idx_b = np.where(meta["brain_idx"].values == b)[0]
-        n = per_brain + (1 if b < extra else 0)
-        selected.extend(rng.choice(idx_b, size=n, replace=False).tolist())
-    selected = sorted(int(i) for i in selected)
+    # ── Typiclust selection: real picks from jesko/selection.py ──
+    emb = np.load(CACHE / "embeddings.npy")
+    assert len(emb) == len(meta), f"emb {len(emb)} != meta {len(meta)}"
+    w = compute_quality_weight(meta)
+    sel_arr, cluster_labels, typicality = typiclust_select(
+        emb, n=N_PICKS, w=w, random_state=SEED,
+    )
+    # per-pick justifications + cosine distance to nearest other pick (deltaNN)
+    just_list = make_justifications(sel_arr, cluster_labels, typicality, w, emb)
+    sel_emb = emb[sel_arr]
+    sim_sel = sel_emb @ sel_emb.T
+    np.fill_diagonal(sim_sel, -np.inf)
+    delta_nn_arr = 1.0 - sim_sel.max(axis=1)
+    sel_info = {
+        int(idx): {
+            "cluster":       int(cluster_labels[idx]),
+            "typicality":    float(typicality[idx]),
+            "delta_nn":      float(delta_nn_arr[k]),
+            "justification": str(just_list[k]),
+            "quality":       float(w[idx]),
+        }
+        for k, idx in enumerate(sel_arr.tolist())
+    }
+    selected = sorted(sel_info.keys())
     assert len(selected) == N_PICKS
 
     # ── selection.json: per-pick metadata + per-patch metrics ──
@@ -87,7 +104,8 @@ def main():
             "z":        int(r["z_mid_absolute"]),
             "y":        int(r["y0"]),
             "x":        int(r["x0"]),
-            "cluster":  int(r["brain_idx"]) + 1,   # placeholder: brain as cluster
+            "cluster":  sel_info[i]["cluster"],
+            "deltaNN":  sel_info[i]["delta_nn"],
             "img":      f"data/patches/{i}.png",
             "seed":     int(i),
             "density":  float(np.clip(cfos_act, 0.3, 1.2)),
@@ -100,32 +118,26 @@ def main():
                 "n_cfos_puncta":       int(r["n_cfos_puncta"]),
                 "n_artifacts":         int(r["n_artifacts"]),
             },
+            "weights": [
+                {"key": "cfos_activity", "val": cfos_act},
+                {"key": "sharpness",     "val": sharp_n},
+                {"key": "snr",           "val": snr_n},
+                {"key": "foreground",    "val": fg_n},
+                {"key": "contrast",      "val": contrast_n, "accent": True},
+            ],
+            "tags": [
+                {"name": f"brain {int(r['brain_idx']):02d}", "primary": True},
+                {"name": f"{int(r['n_cfos_puncta'])} c-Fos+ puncta", "score": cfos_act},
+                {"name": f"{int(r['n_artifacts'])} artifacts",
+                 "score": float(np.clip(int(r["n_artifacts"]) / 100, 0, 1))},
+            ],
+            "justification": sel_info[i]["justification"],
         }
 
     picks = [_pick_row(i) for i in selected]
 
-    # ── focused.json: first pick, fully expanded ──
-    first = picks[0]
-    focused = {
-        **first,
-        "weights": [
-            {"key": "cfos_activity", "val": first["metrics"]["cfos_activity_score"]},
-            {"key": "sharpness",     "val": first["metrics"]["sharpness_norm"]},
-            {"key": "snr",           "val": first["metrics"]["snr_norm"]},
-            {"key": "foreground",    "val": first["metrics"]["foreground_frac"]},
-            {"key": "contrast",      "val": first["metrics"]["contrast_norm"], "accent": True},
-        ],
-        "tags": [
-            {"name": f"brain {first['brain']}", "primary": True},
-            {"name": f"{first['metrics']['n_cfos_puncta']} c-Fos+ puncta", "score": first["metrics"]["cfos_activity_score"]},
-            {"name": f"{first['metrics']['n_artifacts']} artifacts", "score": float(np.clip(first["metrics"]["n_artifacts"] / 100, 0, 1))},
-        ],
-        "justification": (
-            f"Stratified-random demo pick from brain {first['brain']} "
-            f"({first['condition']}). Real selection pipeline (Typiclust + "
-            f"quality-weighted) lands when jesko/selection.py is committed."
-        ),
-    }
+    # ── focused.json: first pick (kept for legacy bootstrap) ──
+    focused = picks[0]
 
     # ── PNGs: load each brain's patches once, slice out the picks for that brain ──
     print(f"rendering {N_PICKS} patch PNGs → {PNGS}")
