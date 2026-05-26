@@ -60,7 +60,9 @@ def main() -> None:
         text=[PROMPT], return_tensors="pt", padding=True, truncation=True
     )
     with torch.no_grad():
-        txt = model.get_text_features(**inputs)
+        txt_out = model.get_text_features(**inputs)
+    # transformers >=5 wraps the tensor in BaseModelOutputWithPooling.
+    txt = txt_out.pooler_output if hasattr(txt_out, "pooler_output") else txt_out
     txt = txt / txt.norm(dim=-1, keepdim=True)
     sims = (txt.cpu().numpy() @ sample.T)[0]
     t_encode = time.perf_counter() - t1

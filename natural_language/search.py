@@ -41,7 +41,9 @@ def search_by_text(
         text=[query], return_tensors="pt", padding=True, truncation=True
     )
     with torch.no_grad():
-        t = model.get_text_features(**inputs)
+        t_out = model.get_text_features(**inputs)
+    # transformers >=5 wraps the tensor in BaseModelOutputWithPooling.
+    t = t_out.pooler_output if hasattr(t_out, "pooler_output") else t_out
     # MUST normalize text features (see CONTEXT.md hard rule #4).
     t = t / t.norm(dim=-1, keepdim=True)
 
