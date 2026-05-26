@@ -1,4 +1,6 @@
 boto3
+torch
+transformers
 s3fs
 h5py
 numpy
