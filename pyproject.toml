@@ -1,0 +1,50 @@
+[project]
+name = "explainable-brains-hackathon"
+version = "0.1.0"
+description = "Explainable Brains Hackathon — Vibraint × Applied Futures (Copenhagen, May 2026)"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "boto3",
+    "torch",
+    "transformers",
+    "s3fs",
+    "h5py",
+    "numpy",
+    "pandas",
+    "SimpleITK",
+    "matplotlib",
+    "seaborn",
+    "plotly",
+    "scipy",
+    "scikit-learn",
+    "umap-learn",
+    "tqdm",
+    "Pillow",
+    "streamlit",
+    "dash",
+    "fastapi",
+    "uvicorn",
+    "requests",
+    "anthropic",
+    "openai",
+    "jupyter",
+    "ipywidgets",
+    "networkx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pytest",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bucket_access"]
+
+[tool.uv]
+package = true
