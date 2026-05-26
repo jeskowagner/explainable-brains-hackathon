@@ -257,8 +257,40 @@ function Stat({ label, value, unit, delta, deltaTone = 'neutral', sub }) {
 // distribution so each patch looks distinct. size accepts a number (fixed
 // px square) or a CSS string like "100%" — in the string case the tile
 // fills its parent's width and uses aspect-ratio:1/1 to stay square.
-function PatchTile({ size = 96, seed = 1, density = 1, blurry, artifact, label, badge, accent }) {
+function PatchTile({ size = 96, seed = 1, density = 1, blurry, artifact, label, badge, accent, imgSrc }) {
   const isFluid = typeof size === 'string';
+  if (imgSrc) {
+    return (
+      <div style={{
+        width: size, height: isFluid ? undefined : size,
+        aspectRatio: isFluid ? '1 / 1' : undefined,
+        position: 'relative', borderRadius: 6, overflow: 'hidden', flexShrink: 0,
+        background: '#060912',
+        boxShadow: accent ? `0 0 0 2px ${accent}, ${T.sh1}` : T.sh1,
+      }}>
+        <img src={imgSrc} alt="" style={{
+          width: '100%', height: '100%', objectFit: 'cover', display: 'block',
+          filter: blurry ? 'blur(0.8px)' : undefined,
+        }} />
+        {label && (
+          <div style={{
+            position: 'absolute', bottom: 4, left: 6, color: '#cfd6e5',
+            fontFamily: T.mono, fontSize: 9, letterSpacing: 0.4, opacity: 0.75,
+            textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+          }}>{label}</div>
+        )}
+        {badge && (
+          <div style={{
+            position: 'absolute', top: 4, right: 4,
+            padding: '1px 5px', borderRadius: 3, fontSize: 9,
+            fontFamily: T.mono, fontWeight: 500,
+            background: badge.bg || 'rgba(0,0,0,0.55)',
+            color: badge.color || '#fff',
+          }}>{badge.text}</div>
+        )}
+      </div>
+    );
+  }
   // pick an internal coord space — for fluid sizing we use a fixed viewBox
   // so the SVG generator below has stable numbers to work with.
   const innerSize = isFluid ? 120 : size;
@@ -338,44 +370,10 @@ function PatchTile({ size = 96, seed = 1, density = 1, blurry, artifact, label, 
   );
 }
 
-// ── scatter (clean hi-fi UMAP) ───────────────────────────────────────────
-const SCATTER_DATA = (() => {
-  let s = 9011;
-  const r = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
-  const blobs = [
-    { cx: 180, cy: 220, rx: 90, ry: 70, n: 70, cond: 'C' },
-    { cx: 420, cy: 290, rx: 100, ry: 65, n: 90, cond: 'S' },
-    { cx: 590, cy: 170, rx: 70, ry: 80, n: 55, cond: 'C' },
-    { cx: 290, cy: 100, rx: 55, ry: 45, n: 35, cond: 'S' },
-    { cx: 650, cy: 350, rx: 55, ry: 55, n: 32, cond: 'S' },
-    { cx: 120, cy: 360, rx: 45, ry: 30, n: 18, cond: 'C' },
-  ];
-  const pts = [];
-  blobs.forEach((b) => {
-    for (let i = 0; i < b.n; i++) {
-      const a = r() * Math.PI * 2;
-      const rr = Math.sqrt(r());
-      pts.push({
-        x: b.cx + Math.cos(a) * b.rx * rr + (r() - 0.5) * 18,
-        y: b.cy + Math.sin(a) * b.ry * rr + (r() - 0.5) * 18,
-        c: b.cond,
-      });
-    }
-  });
-  const targets = [
-    [180, 220], [430, 290], [590, 170], [290, 100], [650, 350], [120, 360],
-    [240, 260], [380, 240], [510, 220], [330, 160], [560, 300], [220, 130],
-  ];
-  targets.forEach(([tx, ty]) => {
-    let best = -1, bd = Infinity;
-    pts.forEach((p, i) => {
-      const d = (p.x - tx) ** 2 + (p.y - ty) ** 2;
-      if (d < bd) { bd = d; best = i; }
-    });
-    if (best >= 0) pts[best].sel = true;
-  });
-  return pts;
-})();
+// ── scatter (real UMAP coords, populated by hifi-app.jsx bootstrap) ─────
+// Was a synthetic blob in the original mock; now empty until bootstrap
+// fetches frontend/data/scatter.json and assigns the real points.
+var SCATTER_DATA = [];
 
 function ScatterPlot({ width = '100%', height = 460, highlightIdx, onHover }) {
   const VB_W = 800, VB_H = 460;
@@ -410,37 +408,17 @@ function ScatterPlot({ width = '100%', height = 460, highlightIdx, onHover }) {
   );
 }
 
-// ── data fixtures (focused patch + selection) ───────────────────────────
-const FOCUSED = {
-  id: 'P-4218',
-  brain: 'Brain 07',
-  scan: '260219_AN0B7_G002_MB1',
-  condition: 'Semaglutide',
-  z: 842, y: 1456, x: 1023,
-  cluster: 7,
-  deltaNN: 0.12,
-  weights: [
-    { key: 'nucleus',    val: 0.86 },
-    { key: 'sharpness',  val: 0.71 },
-    { key: 'foreground', val: 0.62 },
-    { key: 'snr',        val: 0.78 },
-    { key: 'contrast',   val: 0.69 },
-    { key: 'deviation',  val: 0.74, accent: true },
-  ],
-  tags: [
-    { name: 'cluster-7 anchor', primary: true },
-    { name: 'dense c-Fos signal', score: 0.31 },
-    { name: 'cell body cluster', score: 0.22 },
-  ],
+// ── data fixtures: real data, populated by hifi-app.jsx bootstrap. ──────
+// Placeholders are minimal so the components can render before fetch finishes
+// (they won't, because bootstrap awaits before createRoot — but keep
+// non-null defaults for safety).
+var FOCUSED = {
+  id: '…', brain: '', scan: '', condition: '',
+  z: 0, y: 0, x: 0, cluster: 0, deltaNN: 0,
+  weights: [], tags: [], img: '', justification: '',
 };
 
-const SELECTION = Array.from({ length: 50 }, (_, i) => ({
-  id: `P-${(4000 + i * 31 + (i * i) % 87).toString()}`,
-  c: (i * 7) % 5 < 2 ? 'C' : 'S',
-  cluster: ((i * 3 + 1) % 11) + 1,
-  density: 0.4 + ((i * 13) % 60) / 100,
-  seed: i * 11 + 7,
-}));
+var SELECTION = [];
 
 const TABS = [
   { id: 'embedding', label: 'Embedding',  icon: 'scatter' },

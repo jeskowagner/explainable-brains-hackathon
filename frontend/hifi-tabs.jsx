@@ -142,6 +142,7 @@ function EmbeddingTab({ patchCount, setPatchCount, focusIndex, setFocusIndex }) 
                   size={72}
                   seed={p.seed}
                   density={p.density}
+                  imgSrc={p.img}
                   accent={i === focusIndex ? T.accent : undefined}
                   badge={{ text: `c${p.cluster}`, bg: 'rgba(0,0,0,0.55)', color: '#fff' }}
                 />
@@ -173,7 +174,7 @@ function EmbeddingTab({ patchCount, setPatchCount, focusIndex, setFocusIndex }) 
           display: 'flex', flexDirection: 'column', gap: 14,
         }}>
           <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-            <PatchTile size={120} seed={focused.seed} density={focused.density} accent={T.accent} />
+            <PatchTile size={120} seed={focused.seed} density={focused.density} imgSrc={focused.img} accent={T.accent} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                 <span style={{ fontSize: 17, fontWeight: 600, color: T.ink, letterSpacing: -0.3 }}>

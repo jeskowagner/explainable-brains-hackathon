@@ -73,4 +73,26 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+async function bootstrap() {
+  try {
+    const [scatter, selection, focused] = await Promise.all([
+      fetch('data/scatter.json').then(r => r.json()),
+      fetch('data/selection.json').then(r => r.json()),
+      fetch('data/focused.json').then(r => r.json()),
+    ]);
+    // Mark selected points so ScatterPlot's existing p.sel check lights them up.
+    const sel = new Set(scatter.selected);
+    scatter.points.forEach((p, i) => { if (sel.has(i)) p.sel = true; });
+    SCATTER_DATA = scatter.points;
+    SELECTION    = selection;
+    FOCUSED      = focused;
+    window.SCATTER_DATA = SCATTER_DATA;
+    window.SELECTION    = SELECTION;
+    window.FOCUSED      = FOCUSED;
+    console.log(`loaded ${SCATTER_DATA.length} scatter points, ${SELECTION.length} picks`);
+  } catch (err) {
+    console.error('data load failed — falling back to placeholders', err);
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+}
+bootstrap();
