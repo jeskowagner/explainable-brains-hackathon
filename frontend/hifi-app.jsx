@@ -85,7 +85,7 @@ async function bootstrap() {
     scatter.points.forEach((p, i) => { if (sel.has(i)) p.sel = true; });
     SCATTER_DATA = scatter.points;
     SELECTION    = selection;
-    FOCUSED      = focused;
+    FOCUSED      = { ...FOCUSED, ...focused };  // merge over placeholder defaults so deltaNN/tags survive
     window.SCATTER_DATA = SCATTER_DATA;
     window.SELECTION    = SELECTION;
     window.FOCUSED      = FOCUSED;
