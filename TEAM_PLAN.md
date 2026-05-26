@@ -20,7 +20,7 @@ This is the per-person task split. For the *why* behind the overall approach see
   │ (quality     │──▶│ (text-prompt │──▶│  (Streamlit  │
   │  filter)     │   │  semantics)  │   │   UI / UX)   │
   └──────────────┘   └──────────────┘   └──────────────┘
-   keep_mask          per-patch          everything the
+   quality_score      per-patch          everything the
    per patch          prompt scores      judges actually see
 ```
 
@@ -30,7 +30,7 @@ The whole point: **filter → score-and-select → explain → demo**. Each work
 
 ## Christos — Diversity scoring & selection
 
-**Goal:** Given the 512-d PLIP embeddings of all surviving patches (post quality filter), produce (a) one or more diversity *scores* we can put on screen and (b) the *selection* algorithm that picks the final N patches.
+**Goal:** Given the 512-d PLIP embeddings of all patches (with Jesko's `quality_score` attached as a per-patch weight), produce (a) one or more diversity *scores* we can put on screen and (b) the *selection* algorithm that picks the final N patches.
 
 **Why it matters:** This is the methodological core. Diversity scoring is also what powers the killer slide — "our 50 picks cover a held-out brain better than random or k-means picks 500".
 
@@ -53,8 +53,8 @@ The whole point: **filter → score-and-select → explain → demo**. Each work
    - Repeat across the 12 leave-one-out splits → mean ± std.
 
 **Inputs:**
-- `embeddings: (M, 512) float32, L2-normalized` — only the patches surviving Jesko's filter
-- `metadata: pandas DataFrame` — `scan_name`, `condition`, `z0/y0/x0`, `z_mid_absolute`, quality columns
+- `embeddings: (N, 512) float32, L2-normalized` — all 7,264 patches (no rejection happens upstream)
+- `metadata: pandas DataFrame` — `scan_name`, `condition`, `z0/y0/x0`, `z_mid_absolute`, plus Jesko's quality columns (`n_nuclei`, `quality_score`, ...) already merged in by `load_embeddings()`
 
 **Outputs (the contract):**
 ```python
@@ -70,53 +70,45 @@ per_patch_justification: list[str]  # length N, one short sentence each
 - Cosine sim, not Euclidean — embeddings are L2-normalized.
 
 **Watch out:**
-- Vanilla farthest-point sampling without a quality filter will happily pick artifacts. Always run on the filtered set.
+- Vanilla farthest-point sampling will happily pick artifacts at the embedding-space periphery. Weight by `quality_score` (or sample probabilities ∝ `quality_score`) so low-quality patches get downranked without being dropped — patches are *never* removed from the dataset.
 - 50 picks across 12 brains ≈ ~4 per brain. If Typiclust starves a brain entirely, surface that — may want condition-stratified selection.
 
 ---
 
 ## Jesko — Quality filter / nuclei segmentation
 
-**Goal:** Per-patch boolean `keep_mask` that rejects low-quality / artifact patches before diversity sampling.
+**Goal:** Continuous per-patch `quality_score` (in `[0, 1]`) plus interpretable count features (`n_nuclei`, `n_artifacts`, ...) that downstream consumers can *weight by*. **Every patch stays in the dataset — no binary rejection, no `keep_mask`.**
 
-**Why it matters:** "Less is more" is in the brief. Other teams will skip this and their diversity samplers will dutifully select edge artifacts. Quality-filter-first is move #1 of our four moves.
+**Why it matters:** Diversity samplers naively select artifacts at the embedding-space periphery. A continuous quality signal lets Christos downweight those without throwing them away, lets Meds explain *why* each pick was favoured, and keeps the held-out-brain coverage story honest (you can't compare coverage if half the dataset is gone).
 
-**Current state:** `jesko/segmentation.py` already implements a classical nuclei segmenter — white top-hat → Otsu → component classification by area + eccentricity + solidity. Produces `n_nuclei`, `n_artifacts`, `nucleus_score` per patch.
+**Current state:** `jesko/segmentation.py` already implements a classical nuclei segmenter — white top-hat → Otsu (× `THR_FACTOR=0.5`) → component classification by area + eccentricity + solidity. Produces `n_nuclei`, `n_artifacts`, `nucleus_area_frac` per patch. `data.compute_quality()` runs it across all 12 brains in parallel (~40 s on 10 cores) and caches at `cache/quality.parquet`. `load_embeddings()` auto-merges the quality columns into the metadata DataFrame.
 
 **What remains:**
 
-1. **Bulk-score every patch** across all 12 brains. Concat into a quality DataFrame (rows aligned with the embeddings).
-   - ~7,500 patches × ~50 ms/patch ≈ 6 min single-threaded. Parallelise across cores if it's longer.
+1. **Verify the cache is current.** If thresholds in `segmentation.py` change, run `compute_quality(refresh=True)` to rebuild. ~40 s parallel.
 
-2. **Produce a continuous per-patch `quality_score`** in `[0, 1]`, not just a binary mask.
-   - The nuclei count (`n_nuclei`, `nucleus_score`) is the strongest input — patches with many well-formed nuclei score high; patches dominated by artifacts or with zero nuclei score low.
-   - Combine with `metadata.sharpness`, `metadata.foreground_fraction` as sanity backstops (e.g. weighted sum, then squash to `[0, 1]`).
-   - Downstream consumers want this as a *score*, not just a filter — Christos can weight selection by it (a high-quality typical point beats a marginal one at the same density), and Meds shows it in the justification panel.
+2. **`quality_score` definition.** Already implemented: log-rescaled `n_nuclei` anchored so the 95th-percentile count maps to 1.0. Median ≈ 0.66 on the current data; min 0, max 1. Computed inside `compute_quality()`.
 
-3. **Then threshold to get `keep_mask`** for the hard-reject step.
-   - Aim for 10–25% rejection. Optionally pair with embedding-density outlier rejection (drop patches in the lowest-density 5% of PLIP space) — catches artifacts the classical filter misses.
-
-4. **Sanity check** — pull 10 patches from the kept set and 10 from the rejected set, render side-by-side. The rejected ones should *look* obviously worse. Also spot-check a few high-`quality_score` vs low-`quality_score` patches *within* the kept set — the gradient should be visible.
+3. **Sanity check** — colour the dashboard PCA by `quality_score` and confirm low-score patches visibly look worse than high-score ones. Pull side-by-side samples at low / medium / high `quality_score` (e.g. 10th / 50th / 90th percentile) for the demo grid. Per-condition `n_nuclei` distribution should be roughly balanced across G001 vs G002 — a heavy skew means the segmenter is condition-biased.
 
 **Outputs (the contract):**
 ```python
 quality_df: pd.DataFrame   # rows aligned with embeddings/metadata, columns:
                            # n_nuclei, n_artifacts, nucleus_score,
                            # nucleus_area_frac, artifact_area_frac,
-                           # quality_score (continuous, [0,1]), keep (bool)
-keep_mask:     np.ndarray  # (N_total,) bool — quality_df["keep"].values
+                           # quality_score (continuous, [0,1])
 quality_score: np.ndarray  # (N_total,) float in [0,1] — continuous signal
                            # for downstream weighting / display
 ```
 
 **Definition of done:**
-- `keep_mask` is in memory / on disk and consumable by Christos.
-- A 2-by-N grid of kept-vs-rejected sample patches saved for the demo (Meds can drop it in).
-- Per-condition keep rate (G001 vs G002) is roughly equal — a heavy imbalance would mean the filter is biased.
+- `quality_df` cached and loadable via `data.load_embeddings()` (auto-merges quality columns into metadata).
+- A 2-by-N grid of low-vs-medium-vs-high `quality_score` sample patches saved for the demo (Meds can drop it in).
+- Per-condition `n_nuclei` median roughly equal across G001 vs G002.
 
 **Watch out:**
-- The current thresholds in `segmentation.py` are tuned for 5 µm/vox and ~10–15 µm nuclei. Spot-check before bulk-running.
-- Don't be too aggressive — losing >40% of patches kills downstream diversity. Aim for 10–25% rejection unless data clearly justifies more.
+- The current thresholds in `segmentation.py` are tuned for 5 µm/vox and ~10–15 µm nuclei. Spot-check before bulk-running. `THR_FACTOR` (Otsu multiplier, currently 0.5) is the main sensitivity dial — lower = more nuclei detected, higher = stricter.
+- Never produce a `keep_mask`. Patches with `quality_score == 0` are still kept; consumers weight them down rather than dropping them.
 
 ---
 
@@ -171,7 +163,7 @@ def search_by_text(query: str, k: int = 50) -> np.ndarray:
 
 **Watch out:**
 - Don't fine-tune anything. The model loads offline; just embed and score.
-- Negative prompts (`"out of focus"`) double as a sanity check on the quality filter — high score here should correlate with Jesko's rejected set.
+- Negative prompts (`"out of focus"`) double as a sanity check on the quality filter — high prompt score here should correlate with low `quality_score` from Jesko.
 
 ---
 
@@ -199,8 +191,9 @@ def search_by_text(query: str, k: int = 50) -> np.ndarray:
 **Inputs (the contract — what every other person hands you):**
 ```python
 # From Jesko:
-quality_df: pd.DataFrame
-keep_mask:  np.ndarray
+quality_df: pd.DataFrame   # auto-merged into metadata by data.load_embeddings()
+                            # columns include: n_nuclei, n_artifacts, quality_score
+# (no keep_mask — every patch stays; weight by quality_score, don't filter)
 
 # From Christos:
 selected_idx: np.ndarray
@@ -234,8 +227,7 @@ This is the single source of truth for how the four streams plug together. **If 
 |---------------------|-------------------------------------|-------------|---------------------|
 | `embeddings`        | `(N, 512) float32`, L2-normalized   | bucket      | Christos, Nick      |
 | `metadata`          | `pd.DataFrame`                      | bucket      | everyone            |
-| `quality_df`        | `pd.DataFrame` (incl. `keep`, `quality_score`) | Jesko | Christos, Meds      |
-| `keep_mask`         | `(N,) bool`                         | Jesko       | Christos            |
+| `quality_df`        | `pd.DataFrame` (`n_nuclei`, `n_artifacts`, `nucleus_area_frac`, `quality_score`, ...) | Jesko | Christos, Meds      |
 | `quality_score`     | `(N,) float in [0,1]`               | Jesko       | Christos, Meds      |
 | `selected_idx`      | `(K,) int`                          | Christos    | Meds                |
 | `scores`            | `dict[str, float]`                  | Christos    | Meds                |
@@ -255,8 +247,8 @@ Working ugly end-to-end by hour 2. Polish after.
 | Hour    | Christos                                | Jesko                               | Nick                                  | Meds                                       |
 |---------|------------------------------------------|--------------------------------------|----------------------------------------|---------------------------------------------|
 | 0–1     | Typiclust skeleton on a single brain    | Bulk-score all 12 brains             | Prompt set v1, sanity-check on 200 patches | Skeleton Streamlit: UMAP + patch viewer    |
-| 1–2     | Run across all 12, expose `select(...)` | `keep_mask` finalised, sanity grid   | Full prompt scoring + `top_tags`       | Selection grid + condition colouring        |
-| 2–3     | Coverage scores, `reject(idx)` hook     | Embedding-density outlier rejection  | `search_by_text`, demo queries chosen  | Justification panel + reject-and-resample  |
+| 1–2     | Run across all 12, expose `select(...)` | `quality_score` finalised, sanity grid | Full prompt scoring + `top_tags`     | Selection grid + condition colouring        |
+| 2–3     | Coverage scores, `reject(idx)` hook     | Optional: alt quality features (e.g. embedding-density bonus) | `search_by_text`, demo queries chosen  | Justification panel + reject-and-resample  |
 | 3–3.5   | Held-out-brain table                    | Help wherever                        | Help wherever                          | Brain-context slice + text search box       |
 | 3.5–4   | Polish numbers slide                    | Polish quality slide                 | Polish demo queries                    | Demo rehearsal                              |
 

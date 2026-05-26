@@ -29,7 +29,14 @@ CACHE_DIR       = PROJECT_ROOT / "cache"
 EMB_CACHE       = CACHE_DIR / "embeddings.npy"
 META_CACHE      = CACHE_DIR / "metadata.parquet"
 PCA_CACHE       = CACHE_DIR / "pca.npy"
+QUALITY_CACHE   = CACHE_DIR / "quality.parquet"
 PATCH_CACHE_DIR = CACHE_DIR / "patches"
+
+# Continuous quality score (in [0, 1]) maps log(1 + n_nuclei) to [0, 1] with the
+# 95th-percentile count fixed at 1.0 so a single outlier doesn't flatten the dial.
+# Note: no binary keep_mask — every patch stays in the dataset; consumers may
+# weight by quality_score but never reject. (See feedback-no-patch-rejection memory.)
+QUALITY_PCTL = 95
 
 
 def _scan_keys():
@@ -78,12 +85,58 @@ def cache_all_brains():
 
 
 def load_embeddings(refresh=False):
-    """Return (embeddings, metadata). Triggers one-time bucket fetch on first call."""
+    """Return (embeddings, metadata). Triggers one-time bucket fetch on first call.
+
+    If a quality cache exists (`compute_quality()` has been run), its columns
+    are merged into metadata.
+    """
     if refresh or not EMB_CACHE.exists() or not META_CACHE.exists():
-        return cache_all_brains()
-    emb  = np.load(EMB_CACHE)
-    meta = pd.read_parquet(META_CACHE)
+        emb, meta = cache_all_brains()
+    else:
+        emb  = np.load(EMB_CACHE)
+        meta = pd.read_parquet(META_CACHE)
+    if QUALITY_CACHE.exists():
+        q = pd.read_parquet(QUALITY_CACHE)
+        assert len(q) == len(meta), "quality cache row count != metadata"
+        for col in q.columns:
+            if col in meta.columns:
+                meta = meta.drop(columns=[col])
+        meta = pd.concat([meta, q], axis=1)
     return emb, meta
+
+
+def compute_quality(refresh=False, n_jobs=-1):
+    """Bulk-score every patch with the nuclei-segmentation pipeline.
+
+    Adds these columns to the quality cache (aligned with metadata rows):
+        n_nuclei, n_artifacts, nucleus_area_frac, artifact_area_frac, nucleus_score,
+        quality_score  (continuous in [0, 1], log-rescaled n_nuclei)
+
+    No binary keep/reject flag — patches are never dropped; downstream code may
+    weight by `quality_score` but every row stays in the dataset.
+
+    Returns the quality DataFrame.
+    """
+    # absolute import works whether data.py was loaded as `data` (via streamlit)
+    # or as `jesko.data` (via direct import); PROJECT_ROOT is on sys.path either way.
+    from jesko.segmentation import score_all_patches
+
+    if not refresh and QUALITY_CACHE.exists():
+        return pd.read_parquet(QUALITY_CACHE)
+
+    _, meta = load_embeddings()
+    print(f'Scoring {len(meta)} patches with nuclei segmentation (n_jobs={n_jobs})…')
+    q = score_all_patches(meta, load_patches, n_jobs=n_jobs)
+
+    # continuous quality_score in [0, 1]: log-rescaled n_nuclei, anchored at the 95th pctl
+    log_n = np.log1p(q['n_nuclei'].values.astype(float))
+    anchor = np.percentile(log_n, QUALITY_PCTL)
+    q['quality_score'] = np.clip(log_n / max(anchor, 1e-9), 0, 1).astype(np.float32)
+
+    q.to_parquet(QUALITY_CACHE)
+    print(f'✓ Quality cache → {QUALITY_CACHE}  ·  {len(q)} patches scored, '
+          f'quality_score median={float(np.median(q["quality_score"])):.3f}')
+    return q
 
 
 def load_patches(scan_name):
@@ -141,6 +194,29 @@ def compute_umap(n_neighbors=15, min_dist=0.1, refresh=False):
     coords = reducer.fit_transform(emb).astype(np.float32)
     np.save(coords_cache, coords)
     print(f'✓ UMAP {emb.shape} → {coords.shape}  (n_neighbors={n_neighbors}, min_dist={min_dist}, metric=cosine)')
+    return coords
+
+
+def compute_tsne(perplexity=30, refresh=False):
+    """t-SNE-project the 7264 embeddings to (N, 2). Cached. Returns coords.
+
+    Embeddings are L2-normalized so Euclidean distance is monotonic with cosine —
+    default `metric='euclidean'` preserves the same neighborhood structure as cosine.
+    """
+    from sklearn.manifold import TSNE
+
+    coords_cache = CACHE_DIR / f'tsne_p{perplexity}.npy'
+    if not refresh and coords_cache.exists():
+        return np.load(coords_cache)
+
+    emb, _ = load_embeddings()
+    reducer = TSNE(
+        n_components=2, perplexity=perplexity, init='pca',
+        random_state=0, n_jobs=-1,
+    )
+    coords = reducer.fit_transform(emb).astype(np.float32)
+    np.save(coords_cache, coords)
+    print(f'✓ t-SNE {emb.shape} → {coords.shape}  (perplexity={perplexity})')
     return coords
 
 

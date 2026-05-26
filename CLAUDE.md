@@ -95,8 +95,7 @@ The sprint is split four ways. `TEAM_PLAN.md` is the authoritative per-person sp
 
 - `jesko/segmentation.py` is already implemented: white top-hat → Otsu threshold → component classification by area + eccentricity + solidity. Produces `n_nuclei`, `n_artifacts`, `nucleus_score`. See `score_row(patch_u16)` for the per-patch entry point.
 - Thresholds (`TOPHAT_R=5`, `MIN_NUC=2`, `MAX_NUC=30`, ...) are tuned for **5 µm/vox**, ~10–15 µm nuclei (= 3–10 px area). Spot-check before bulk-running but don't drift far without a reason.
-- Expected contract: `quality_df` (DataFrame, aligned with embeddings/metadata), `keep_mask` (bool), and `quality_score` (continuous in `[0, 1]`). The continuous score is consumed by Christos (selection weighting) and Meds (justification panel), not only the binary mask.
-- Aim for 10–25% rejection. Strong G001/G002 keep-rate imbalance is a red flag (filter has a bias).
+- Expected contract: `quality_df` (DataFrame, aligned with embeddings/metadata) with per-patch counts (`n_nuclei`, `n_artifacts`, `nucleus_area_frac`, ...) plus `quality_score` (continuous in `[0, 1]`, log-rescaled `n_nuclei` anchored at the 95th percentile). The continuous score is consumed by Christos (selection weighting) and Meds (justification panel). **No `keep_mask` / binary rejection** — every patch stays in the dataset; downstream code weights by `quality_score` instead of dropping rows. Strong G001/G002 imbalance in `n_nuclei` distribution is still a useful red flag for a biased filter, even though nothing is rejected.
 - Bulk scoring ~7,500 patches × ~50 ms ≈ 6 min single-threaded — parallelise with `joblib` if it pushes past that.
 
 ### Natural language / PLIP text prompts (Nick)

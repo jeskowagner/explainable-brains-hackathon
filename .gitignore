@@ -8,6 +8,9 @@ bucket_access/config.py
 *.nii.gz
 *.csv
 
+# local data cache (per-session, never committed)
+cache/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -226,3 +229,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+.DS_store

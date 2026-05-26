@@ -16,17 +16,21 @@ import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
 
-from data import compute_pca, compute_umap, load_embeddings, load_patch, patch_to_uint8
+from PIL import Image, ImageDraw
+
+from data import compute_pca, compute_tsne, compute_umap, load_embeddings, load_patch, patch_to_uint8
+from jesko.segmentation import segment_patch
 
 st.set_page_config(page_title="Explainable Brains — Embedding explorer", layout="wide")
 
 
 CATEGORICAL = {
     "condition":     {"Control": "#3b82f6", "Semaglutide": "#ef4444"},
-    "brain_idx":     None,   # filled at runtime from a qualitative palette
+    "brain_idx":     None,    # filled at runtime from a qualitative palette
 }
 
 CONTINUOUS = [
+    "quality_score", "n_nuclei", "n_artifacts", "nucleus_area_frac",
     "sharpness", "snr", "local_contrast", "foreground_fraction",
     "mean_intensity", "std_intensity", "fraction_signal",
 ]
@@ -37,21 +41,26 @@ def _load():
     emb, meta = load_embeddings()
     pca_coords, pca_var = compute_pca(n_components=2)
     umap_coords = compute_umap()
-    return emb, meta, pca_coords, pca_var, umap_coords
+    tsne_coords = compute_tsne()
+    return emb, meta, pca_coords, pca_var, umap_coords, tsne_coords
 
 
-emb, meta, pca_coords, pca_var, umap_coords = _load()
+emb, meta, pca_coords, pca_var, umap_coords, tsne_coords = _load()
 
 # ---------- Sidebar controls ----------
 with st.sidebar:
     st.header("View")
-    projection = st.radio("Projection", ["PCA", "UMAP"], horizontal=True)
+    projection = st.radio("Projection", ["PCA", "UMAP", "t-SNE"], horizontal=True)
 
     color_by = st.selectbox(
         "Color by",
         list(CATEGORICAL.keys()) + CONTINUOUS,
         index=0,
     )
+    st.markdown("---")
+    st.header("Patch viewer")
+    show_overlay = st.checkbox("Segmentation overlay", value=True,
+                               help="Draw nucleus / artifact outlines on the selected patch.")
     st.markdown("---")
     st.caption(
         f"**{len(meta):,} patches** · 12 brains  \n"
@@ -65,11 +74,16 @@ if projection == "PCA":
     x_label = f"PC1 ({pca_var[0]*100:.1f}%)"
     y_label = f"PC2 ({pca_var[1]*100:.1f}%)"
     subtitle = f"PCA · {pca_var.sum()*100:.1f}% explained"
-else:
+elif projection == "UMAP":
     coords = umap_coords
     x_label = "UMAP-1"
     y_label = "UMAP-2"
     subtitle = "UMAP · cosine, n_neighbors=15, min_dist=0.1"
+else:  # t-SNE
+    coords = tsne_coords
+    x_label = "t-SNE-1"
+    y_label = "t-SNE-2"
+    subtitle = "t-SNE · perplexity=30, init=pca"
 visible_idx = np.arange(len(meta))
 
 st.title("Explainable Brains — embedding explorer")
@@ -101,12 +115,12 @@ HOVER = (
 def _build_figure():
     fig = go.Figure()
     if color_by in CATEGORICAL:
-        if color_by == "condition":
-            cats_colors = list(CATEGORICAL["condition"].items())
-        else:  # brain_idx
+        if color_by == "brain_idx":
             palette = px.colors.qualitative.Light24
             cats = sorted(meta["brain_idx"].unique())
             cats_colors = [(c, palette[i % len(palette)]) for i, c in enumerate(cats)]
+        else:
+            cats_colors = list(CATEGORICAL[color_by].items())
 
         for cat, col in cats_colors:
             mask = (meta[color_by].values == cat)
@@ -159,6 +173,22 @@ with left:
         width="stretch",
     )
 
+def _render_patch(patch_u16, overlay):
+    """Return (PIL RGB image, seg-or-None). Overlay draws nuclei/artifact outlines."""
+    img = Image.fromarray(patch_to_uint8(patch_u16)).convert("RGB")
+    if not overlay:
+        return img, None
+    seg = segment_patch(patch_u16)
+    draw = ImageDraw.Draw(img)
+    for r in seg.nuclei_props:
+        cy, cx = r.centroid
+        draw.ellipse((cx - 3, cy - 3, cx + 3, cy + 3), outline=(0, 255, 0), width=1)
+    for r in seg.artifacts_props:
+        miny, minx, maxy, maxx = r.bbox
+        draw.rectangle((minx, miny, maxx, maxy), outline=(255, 80, 80), width=1)
+    return img, seg
+
+
 # ---------- Patch viewer ----------
 with right:
     selected = event.selection.get("points") if event and event.selection else []
@@ -169,17 +199,28 @@ with right:
         global_idx = int(pt["customdata"][0])
         row = meta.iloc[global_idx]
         patch = load_patch(row["scan_name"], int(row["patch_idx"]))
-        st.image(
-            patch_to_uint8(patch),
-            caption=f"global idx {global_idx} · {row['scan_name']}",
-            width="stretch",
-        )
+
+        img, seg = _render_patch(patch, overlay=show_overlay)
+        if seg is not None:
+            cap = (f"global idx {global_idx} · "
+                   f"{seg.n_nuclei} nuclei (green) · {seg.n_artifacts} artifacts (red)")
+        else:
+            cap = f"global idx {global_idx} · {row['scan_name']}"
+        st.image(img, caption=cap, width="stretch")
 
         st.markdown(
-            f"**Condition:** {row['condition']}  ·  **Brain:** #{row['brain_idx']} ({row['animal_nr']})"
+            f"**Condition:** {row['condition']}  ·  **Brain:** #{row['brain_idx']} "
+            f"({row['animal_nr']})"
         )
         st.markdown(
-            "**Quality metrics**\n\n"
+            "**Nuclei segmentation**\n\n"
+            f"- quality_score · `{row.get('quality_score', float('nan')):.3f}` (in [0, 1])\n"
+            f"- n_nuclei · `{int(row.get('n_nuclei', 0))}`\n"
+            f"- n_artifacts · `{int(row.get('n_artifacts', 0))}`\n"
+            f"- nucleus_area_frac · `{row.get('nucleus_area_frac', 0):.3f}`"
+        )
+        st.markdown(
+            "**Per-patch metrics (organizer-provided)**\n\n"
             f"- sharpness · `{row['sharpness']:.2f}`\n"
             f"- snr · `{row['snr']:.2f}`\n"
             f"- local_contrast · `{row['local_contrast']:.2f}`\n"
