@@ -45,19 +45,7 @@ emb, meta, pca_coords, pca_var, umap_coords = _load()
 # ---------- Sidebar controls ----------
 with st.sidebar:
     st.header("View")
-    view_mode = st.radio("Mode", ["Embedding (2-D)", "Brain anatomy (3-D)"])
-
-    if view_mode == "Embedding (2-D)":
-        projection = st.radio("Projection", ["PCA", "UMAP"], horizontal=True)
-        brain_filter = None
-    else:
-        projection = None
-        brain_filter = st.multiselect(
-            "Brains",
-            sorted(meta["brain_idx"].unique()),
-            default=[meta["brain_idx"].iloc[0]],
-            format_func=lambda b: f"#{b} · {meta[meta['brain_idx']==b]['condition'].iloc[0][:4]} · {meta[meta['brain_idx']==b]['animal_nr'].iloc[0]}",
-        )
+    projection = st.radio("Projection", ["PCA", "UMAP"], horizontal=True)
 
     color_by = st.selectbox(
         "Color by",
@@ -72,27 +60,17 @@ with st.sidebar:
     )
 
 # ---------- Pick projection ----------
-if view_mode == "Embedding (2-D)":
-    if projection == "PCA":
-        coords = pca_coords
-        x_label = f"PC1 ({pca_var[0]*100:.1f}%)"
-        y_label = f"PC2 ({pca_var[1]*100:.1f}%)"
-        subtitle = f"PCA · {pca_var.sum()*100:.1f}% explained"
-    else:
-        coords = umap_coords
-        x_label = "UMAP-1"
-        y_label = "UMAP-2"
-        subtitle = "UMAP · cosine, n_neighbors=15, min_dist=0.1"
-    visible_idx = np.arange(len(meta))
+if projection == "PCA":
+    coords = pca_coords
+    x_label = f"PC1 ({pca_var[0]*100:.1f}%)"
+    y_label = f"PC2 ({pca_var[1]*100:.1f}%)"
+    subtitle = f"PCA · {pca_var.sum()*100:.1f}% explained"
 else:
-    coords = None  # 3-D path builds its own scatter
-    x_label, y_label = "x0 (vox)", "y0 (vox)"
-    if brain_filter:
-        visible_idx = np.where(meta["brain_idx"].isin(brain_filter).values)[0]
-        subtitle = f"Brain anatomy · 5 µm voxels · {len(brain_filter)} brain(s) · {len(visible_idx)} patches"
-    else:
-        visible_idx = np.array([], dtype=int)
-        subtitle = "Brain anatomy · pick one or more brains in the sidebar"
+    coords = umap_coords
+    x_label = "UMAP-1"
+    y_label = "UMAP-2"
+    subtitle = "UMAP · cosine, n_neighbors=15, min_dist=0.1"
+visible_idx = np.arange(len(meta))
 
 st.title("Explainable Brains — embedding explorer")
 st.caption(subtitle)
@@ -121,21 +99,6 @@ HOVER = (
 
 
 def _build_figure():
-    is_3d = view_mode != "Embedding (2-D)"
-
-    def _scatter_kwargs(idx):
-        """Coords for the chosen view mode for the given row indices."""
-        if is_3d:
-            return dict(
-                x=meta["x0"].values[idx],
-                y=meta["y0"].values[idx],
-                z=meta["z_mid_absolute"].values[idx],
-            )
-        return dict(x=coords[idx, 0], y=coords[idx, 1])
-
-    Scatter = go.Scatter3d if is_3d else go.Scattergl
-    marker_size = 3 if is_3d else 4
-
     fig = go.Figure()
     if color_by in CATEGORICAL:
         if color_by == "condition":
@@ -151,10 +114,10 @@ def _build_figure():
             idx = np.intersect1d(idx, visible_idx, assume_unique=True)
             if len(idx) == 0:
                 continue
-            fig.add_trace(Scatter(
-                **_scatter_kwargs(idx),
+            fig.add_trace(go.Scattergl(
+                x=coords[idx, 0], y=coords[idx, 1],
                 mode="markers",
-                marker=dict(size=marker_size, color=col, opacity=0.7 if is_3d else 0.55),
+                marker=dict(size=4, color=col, opacity=0.55),
                 name=str(cat),
                 customdata=_customdata(idx),
                 hovertemplate=HOVER,
@@ -164,11 +127,11 @@ def _build_figure():
         if len(idx) > 0:
             vals = meta[color_by].values[idx].astype(float)
             cmin, cmax = np.percentile(vals, [1, 99])
-            fig.add_trace(Scatter(
-                **_scatter_kwargs(idx),
+            fig.add_trace(go.Scattergl(
+                x=coords[idx, 0], y=coords[idx, 1],
                 mode="markers",
                 marker=dict(
-                    size=marker_size, color=vals, opacity=0.85 if is_3d else 0.7,
+                    size=4, color=vals, opacity=0.7,
                     colorscale="Viridis", cmin=cmin, cmax=cmax,
                     showscale=True,
                     colorbar=dict(title=color_by, len=0.6, thickness=12),
@@ -178,32 +141,19 @@ def _build_figure():
                 showlegend=False,
             ))
 
-    if is_3d:
-        fig.update_layout(
-            scene=dict(
-                xaxis_title="x0 (vox)",
-                yaxis_title="y0 (vox)",
-                zaxis_title="z_mid (vox)",
-                aspectmode="data",
-                zaxis=dict(autorange="reversed"),  # anatomical convention: z increases ventrally
-            ),
-            height=680, margin=dict(l=0, r=0, t=10, b=0),
-            legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
-        )
-    else:
-        fig.update_layout(
-            xaxis_title=x_label, yaxis_title=y_label,
-            height=640, margin=dict(l=0, r=0, t=10, b=0),
-            legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
-            dragmode="pan",
-        )
+    fig.update_layout(
+        xaxis_title=x_label, yaxis_title=y_label,
+        height=640, margin=dict(l=0, r=0, t=10, b=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0),
+        dragmode="pan",
+    )
     return fig
 
 
 with left:
     event = st.plotly_chart(
         _build_figure(),
-        key=f"chart_{view_mode}_{projection}_{color_by}_{tuple(brain_filter) if brain_filter else ()}",
+        key=f"chart_{projection}_{color_by}",
         on_select="rerun",
         selection_mode=["points"],
         width="stretch",

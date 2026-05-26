@@ -11,16 +11,21 @@ fetch from the Hetzner bucket into `cache/`. Subsequent calls are local-disk fas
 `group_nr`, `animal_nr`. Row i of `meta` aligns with row i of `emb`.
 """
 
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from bucket_access.bucket_utils import (
     list_files, read_h5_embeddings, read_h5_patches,
 )
 
-CACHE_DIR       = Path(__file__).parent / "cache"
+CACHE_DIR       = PROJECT_ROOT / "cache"
 EMB_CACHE       = CACHE_DIR / "embeddings.npy"
 META_CACHE      = CACHE_DIR / "metadata.parquet"
 PCA_CACHE       = CACHE_DIR / "pca.npy"
