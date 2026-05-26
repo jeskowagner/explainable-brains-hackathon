@@ -25,18 +25,20 @@ from bucket_access.bucket_utils import (
     list_files, read_h5_embeddings, read_h5_patches,
 )
 
-CACHE_DIR       = PROJECT_ROOT / "cache"
-EMB_CACHE       = CACHE_DIR / "embeddings.npy"
-META_CACHE      = CACHE_DIR / "metadata.parquet"
-PCA_CACHE       = CACHE_DIR / "pca.npy"
-QUALITY_CACHE   = CACHE_DIR / "quality.parquet"
-PATCH_CACHE_DIR = CACHE_DIR / "patches"
+CACHE_DIR        = PROJECT_ROOT / "cache"
+EMB_CACHE        = CACHE_DIR / "embeddings.npy"
+META_CACHE       = CACHE_DIR / "metadata.parquet"
+PCA_CACHE        = CACHE_DIR / "pca.npy"
+SEG_CACHE        = CACHE_DIR / "segmentation.parquet"
+PATCH_CACHE_DIR  = CACHE_DIR / "patches"
 
-# Continuous quality score (in [0, 1]) maps log(1 + n_nuclei) to [0, 1] with the
-# 95th-percentile count fixed at 1.0 so a single outlier doesn't flatten the dial.
-# Note: no binary keep_mask — every patch stays in the dataset; consumers may
-# weight by quality_score but never reject. (See feedback-no-patch-rejection memory.)
-QUALITY_PCTL = 95
+# Continuous c-Fos activity score (in [0, 1]) maps log(1 + n_cfos_puncta) to [0, 1]
+# with the 95th-percentile count fixed at 1.0 so a single outlier doesn't flatten
+# the dial. Note: no binary keep_mask — every patch stays in the dataset; consumers
+# may weight by cfos_activity_score, but absence of signal is biologically meaningful
+# (inactive region, not bad data) so consumers should think before naïvely down-weighting.
+# (See feedback-no-patch-rejection memory.)
+CFOS_PCTL = 95
 
 
 def _scan_keys():
@@ -87,56 +89,58 @@ def cache_all_brains():
 def load_embeddings(refresh=False):
     """Return (embeddings, metadata). Triggers one-time bucket fetch on first call.
 
-    If a quality cache exists (`compute_quality()` has been run), its columns
-    are merged into metadata.
+    If a segmentation cache exists (`compute_segmentation()` has been run), its
+    columns are merged into metadata.
     """
     if refresh or not EMB_CACHE.exists() or not META_CACHE.exists():
         emb, meta = cache_all_brains()
     else:
         emb  = np.load(EMB_CACHE)
         meta = pd.read_parquet(META_CACHE)
-    if QUALITY_CACHE.exists():
-        q = pd.read_parquet(QUALITY_CACHE)
-        assert len(q) == len(meta), "quality cache row count != metadata"
-        for col in q.columns:
+    if SEG_CACHE.exists():
+        seg = pd.read_parquet(SEG_CACHE)
+        assert len(seg) == len(meta), "segmentation cache row count != metadata"
+        for col in seg.columns:
             if col in meta.columns:
                 meta = meta.drop(columns=[col])
-        meta = pd.concat([meta, q], axis=1)
+        meta = pd.concat([meta, seg], axis=1)
     return emb, meta
 
 
-def compute_quality(refresh=False, n_jobs=-1):
-    """Bulk-score every patch with the nuclei-segmentation pipeline.
+def compute_segmentation(refresh=False, n_jobs=-1):
+    """Bulk-score every patch with the c-Fos puncta segmentation pipeline.
 
-    Adds these columns to the quality cache (aligned with metadata rows):
-        n_nuclei, n_artifacts, nucleus_area_frac, artifact_area_frac, nucleus_score,
-        quality_score  (continuous in [0, 1], log-rescaled n_nuclei)
+    Adds these columns to the segmentation cache (aligned with metadata rows):
+        n_cfos_puncta, n_artifacts, cfos_area_frac, artifact_area_frac, cfos_purity,
+        cfos_activity_score  (continuous in [0, 1], log-rescaled n_cfos_puncta)
 
-    No binary keep/reject flag — patches are never dropped; downstream code may
-    weight by `quality_score` but every row stays in the dataset.
+    No binary keep/reject flag — patches are never dropped. The c-Fos activity
+    score captures *activity*, not patch quality: absence of signal is biologically
+    meaningful (inactive region), so downstream consumers should not naïvely
+    treat a low score as "bad data".
 
-    Returns the quality DataFrame.
+    Returns the segmentation DataFrame.
     """
     # absolute import works whether data.py was loaded as `data` (via streamlit)
     # or as `jesko.data` (via direct import); PROJECT_ROOT is on sys.path either way.
     from jesko.segmentation import score_all_patches
 
-    if not refresh and QUALITY_CACHE.exists():
-        return pd.read_parquet(QUALITY_CACHE)
+    if not refresh and SEG_CACHE.exists():
+        return pd.read_parquet(SEG_CACHE)
 
     _, meta = load_embeddings()
-    print(f'Scoring {len(meta)} patches with nuclei segmentation (n_jobs={n_jobs})…')
-    q = score_all_patches(meta, load_patches, n_jobs=n_jobs)
+    print(f'Scoring {len(meta)} patches with c-Fos puncta segmentation (n_jobs={n_jobs})…')
+    seg = score_all_patches(meta, load_patches, n_jobs=n_jobs)
 
-    # continuous quality_score in [0, 1]: log-rescaled n_nuclei, anchored at the 95th pctl
-    log_n = np.log1p(q['n_nuclei'].values.astype(float))
-    anchor = np.percentile(log_n, QUALITY_PCTL)
-    q['quality_score'] = np.clip(log_n / max(anchor, 1e-9), 0, 1).astype(np.float32)
+    # continuous cfos_activity_score in [0, 1]: log-rescaled n_cfos_puncta, anchored at the 95th pctl
+    log_n = np.log1p(seg['n_cfos_puncta'].values.astype(float))
+    anchor = np.percentile(log_n, CFOS_PCTL)
+    seg['cfos_activity_score'] = np.clip(log_n / max(anchor, 1e-9), 0, 1).astype(np.float32)
 
-    q.to_parquet(QUALITY_CACHE)
-    print(f'✓ Quality cache → {QUALITY_CACHE}  ·  {len(q)} patches scored, '
-          f'quality_score median={float(np.median(q["quality_score"])):.3f}')
-    return q
+    seg.to_parquet(SEG_CACHE)
+    print(f'✓ Segmentation cache → {SEG_CACHE}  ·  {len(seg)} patches scored, '
+          f'cfos_activity_score median={float(np.median(seg["cfos_activity_score"])):.3f}')
+    return seg
 
 
 def load_patches(scan_name):

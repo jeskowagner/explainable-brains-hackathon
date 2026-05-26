@@ -1,11 +1,20 @@
-"""Nuclei-like object segmentation for c-Fos patches.
+"""c-Fos+ punctate-signal segmentation for c-Fos patches.
 
-The score answers: how much of this patch looks like discrete, round, nucleus-sized
-objects (good signal) vs long-line / diffuse artifacts (bad signal)?
+We detect bright punctate structures that correspond to **c-Fos-positive**
+nuclei — i.e. active neurons that have expressed c-Fos. Cells that are *not*
+c-Fos+ are invisible in this stain, so the count is a measure of *activity*,
+not of patch quality. **Absence of signal is itself biologically meaningful**
+(an inactive region), so don't read low counts as "bad data".
+
+Naming convention:
+  - `cfos_puncta`         : bright blobs detected by LoG (one per c-Fos+ nucleus)
+  - `artifacts`           : long-line / fiber-tract elongated structures (top-hat path)
+  - `cfos_activity_score` : continuous in [0, 1], log-rescaled `n_cfos_puncta`,
+                            anchored so the 95th-pctl count maps to 1.0
 
 Pipeline per patch (two-detector hybrid):
 
-  1. **Nucleus detection — Laplacian-of-Gaussian (LoG) blob detection.**
+  1. **c-Fos+ punctum detection — Laplacian-of-Gaussian (LoG) blob detection.**
      `skimage.feature.blob_log` finds bright blobs at multiple scales (sigma 1–3),
      intensity-robust to blur because the LoG response is normalized. Returns
      a list of (y, x, sigma) — we estimate per-blob area from sigma.
@@ -18,8 +27,8 @@ Pipeline per patch (two-detector hybrid):
      LoG can't catch because it's looking for round things. Big saturated
      blobs (area > `MAX_VALID`) are dropped entirely.
 
-LoG is used for nuclei because the previous top-hat-based detection systematically
-under-counted in blurry / low-sharpness patches (a blurry nucleus has lower peak
+LoG is used because the previous top-hat-based detection systematically
+under-counted in blurry / low-sharpness patches (a blurry punctum has lower peak
 intensity → fell below Otsu's threshold). LoG's multi-scale, normalized response
 is much less sharpness-sensitive.
 
@@ -51,7 +60,7 @@ PATCH_AREA = 256 * 256
 
 
 class _Blob:
-    """Minimal skimage-RegionProperties-compatible object for LoG-detected nuclei.
+    """Minimal skimage-RegionProperties-compatible object for a LoG-detected c-Fos+ punctum.
 
     Exposes the attributes consumed by the patch viewer (`centroid`, `bbox`) and
     by the score aggregator (`area`).
@@ -73,14 +82,14 @@ class _Blob:
 
 @dataclass
 class SegResult:
-    n_nuclei:           int
-    n_artifacts:        int
+    n_cfos_puncta:      int      # c-Fos+ blobs detected by LoG
+    n_artifacts:        int      # long-line artifacts detected by top-hat + shape
     n_other:            int
-    nucleus_area:       int
+    cfos_area:          int      # sum of c-Fos+ punctum areas (px)
     artifact_area:      int
-    nucleus_score:      float   # n_nuclei / (n_nuclei + n_artifacts), in [0, 1]
-    nuclei_props:       list    # list[_Blob]
-    artifacts_props:    list    # list[skimage.measure.RegionProperties]
+    cfos_purity:        float    # n_cfos_puncta / (n_cfos_puncta + n_artifacts), in [0, 1]
+    cfos_props:         list     # list[_Blob], one per c-Fos+ punctum
+    artifacts_props:    list     # list[skimage.measure.RegionProperties]
     other_props:        list
     label_image:        np.ndarray  # the artifact-detection mask (top-hat path)
 
@@ -92,8 +101,8 @@ def _safe_otsu(img):
         return img.mean() + img.std()
 
 
-def _detect_nuclei_log(patch_u16):
-    """LoG blob detection on normalized [0, 1] image; returns list[_Blob]."""
+def _detect_cfos_puncta_log(patch_u16):
+    """LoG blob detection on normalized [0, 1] image; returns list[_Blob] of c-Fos+ puncta."""
     peak = float(patch_u16.max())
     if peak <= 0:
         return []
@@ -134,19 +143,19 @@ def _detect_artifacts_tophat(patch_u16, tophat_r=TOPHAT_R, thr_factor=THR_FACTOR
 
 def segment_patch(patch_u16) -> SegResult:
     """Run the hybrid segmentation pipeline on a single (256, 256) uint16 patch."""
-    nuclei = _detect_nuclei_log(patch_u16)
+    cfos = _detect_cfos_puncta_log(patch_u16)
     artifacts, lbl = _detect_artifacts_tophat(patch_u16)
 
-    n_n, n_a = len(nuclei), len(artifacts)
-    nuc_area = int(sum(b.area for b in nuclei))
-    art_area = int(sum(r.area for r in artifacts))
-    score = n_n / max(n_n + n_a, 1)
+    n_c, n_a = len(cfos), len(artifacts)
+    cfos_area = int(sum(b.area for b in cfos))
+    art_area  = int(sum(r.area for r in artifacts))
+    purity = n_c / max(n_c + n_a, 1)
 
     return SegResult(
-        n_nuclei=n_n, n_artifacts=n_a, n_other=0,
-        nucleus_area=nuc_area, artifact_area=art_area,
-        nucleus_score=score,
-        nuclei_props=nuclei, artifacts_props=artifacts, other_props=[],
+        n_cfos_puncta=n_c, n_artifacts=n_a, n_other=0,
+        cfos_area=cfos_area, artifact_area=art_area,
+        cfos_purity=purity,
+        cfos_props=cfos, artifacts_props=artifacts, other_props=[],
         label_image=lbl,
     )
 
@@ -155,11 +164,11 @@ def score_row(patch_u16):
     """Return only the scalar features (for bulk scoring into a DataFrame)."""
     r = segment_patch(patch_u16)
     return {
-        "n_nuclei":           r.n_nuclei,
+        "n_cfos_puncta":      r.n_cfos_puncta,
         "n_artifacts":        r.n_artifacts,
-        "nucleus_area_frac":  r.nucleus_area / PATCH_AREA,
+        "cfos_area_frac":     r.cfos_area / PATCH_AREA,
         "artifact_area_frac": r.artifact_area / PATCH_AREA,
-        "nucleus_score":      r.nucleus_score,
+        "cfos_purity":        r.cfos_purity,
     }
 
 

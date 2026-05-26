@@ -30,7 +30,7 @@ CATEGORICAL = {
 }
 
 CONTINUOUS = [
-    "quality_score", "n_nuclei", "n_artifacts", "nucleus_area_frac",
+    "cfos_activity_score", "n_cfos_puncta", "n_artifacts", "cfos_area_frac",
     "sharpness", "snr", "local_contrast", "foreground_fraction",
     "mean_intensity", "std_intensity", "fraction_signal",
 ]
@@ -174,13 +174,13 @@ with left:
     )
 
 def _render_patch(patch_u16, overlay):
-    """Return (PIL RGB image, seg-or-None). Overlay draws nuclei/artifact outlines."""
+    """Return (PIL RGB image, seg-or-None). Overlay draws c-Fos puncta / artifact outlines."""
     img = Image.fromarray(patch_to_uint8(patch_u16)).convert("RGB")
     if not overlay:
         return img, None
     seg = segment_patch(patch_u16)
     draw = ImageDraw.Draw(img)
-    for r in seg.nuclei_props:
+    for r in seg.cfos_props:
         cy, cx = r.centroid
         draw.ellipse((cx - 3, cy - 3, cx + 3, cy + 3), outline=(0, 255, 0), width=1)
     for r in seg.artifacts_props:
@@ -203,7 +203,7 @@ with right:
         img, seg = _render_patch(patch, overlay=show_overlay)
         if seg is not None:
             cap = (f"global idx {global_idx} · "
-                   f"{seg.n_nuclei} nuclei (green) · {seg.n_artifacts} artifacts (red)")
+                   f"{seg.n_cfos_puncta} c-Fos+ puncta (green) · {seg.n_artifacts} artifacts (red)")
         else:
             cap = f"global idx {global_idx} · {row['scan_name']}"
         st.image(img, caption=cap, width="stretch")
@@ -213,11 +213,11 @@ with right:
             f"({row['animal_nr']})"
         )
         st.markdown(
-            "**Nuclei segmentation**\n\n"
-            f"- quality_score · `{row.get('quality_score', float('nan')):.3f}` (in [0, 1])\n"
-            f"- n_nuclei · `{int(row.get('n_nuclei', 0))}`\n"
+            "**c-Fos+ signal**\n\n"
+            f"- cfos_activity_score · `{row.get('cfos_activity_score', float('nan')):.3f}` (in [0, 1] — activity, not patch quality)\n"
+            f"- n_cfos_puncta · `{int(row.get('n_cfos_puncta', 0))}`\n"
             f"- n_artifacts · `{int(row.get('n_artifacts', 0))}`\n"
-            f"- nucleus_area_frac · `{row.get('nucleus_area_frac', 0):.3f}`"
+            f"- cfos_area_frac · `{row.get('cfos_area_frac', 0):.3f}`"
         )
         st.markdown(
             "**Per-patch metrics (organizer-provided)**\n\n"

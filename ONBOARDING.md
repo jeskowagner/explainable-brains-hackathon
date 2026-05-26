@@ -22,7 +22,7 @@ PLIP = `vinid/plip`, a CLIP-architecture vision-language model. 512-d embeddings
 
 ## The four moves — one paragraph each
 
-**1. Quality filter as a *signal*, not a gate.** The brief says "less is more". Every other team will read past that. We score each patch with a nuclei-segmentation pipeline (LoG blob detection for nuclei, top-hat + shape filter for long-line / fiber-tract artifacts) and produce a continuous `quality_score` per patch. Selection downstream *weights by* this score so artifacts get downranked — but **no patches are ever dropped**. This keeps the held-out-brain coverage evaluation honest and lets the UI explain *why* each pick was favoured.
+**1. c-Fos activity as a *signal*, not a quality gate.** The brief says "less is more". Every other team will read past that. We segment each patch with a hybrid pipeline (LoG blob detection for c-Fos+ puncta, top-hat + shape filter for long-line / fiber-tract artifacts) and produce a continuous `cfos_activity_score` per patch. Counts go to downstream as supplementary signal — Christos can weight selection by activity (or artifact presence), and Meds shows the count in the justification panel. **No patches are ever dropped**: the absence of c-Fos signal is biologically meaningful (an inactive region), not a sign of bad data. This keeps the held-out-brain coverage evaluation honest and lets the UI explain *why* each pick was favoured.
 
 **2. PLIP text-prompt axes.** PLIP's text encoder lives in the same 512-d space as the image embeddings. Score each patch against biology prompts ("dense c-Fos signal", "scattered neurons", "fiber tract", "tissue edge", "out of focus"). Patches become interpretable profiles. The UMAP gets meaningful axes. **Text-guided selection (the extension) becomes a 30-line addition.**
 
@@ -40,7 +40,7 @@ Working ugly end-to-end by hour 2. Polish after.
 
 | Hour | Goal |
 |------|------|
-| 0–1 | Load all 12 brains' embeddings + metadata. Quality filter + Typiclust selection. Print top-N indices to console. |
+| 0–1 | Load all 12 brains' embeddings + metadata. c-Fos puncta segmentation + Typiclust selection. Print top-N indices to console. |
 | 1–2 | Minimal Streamlit: UMAP scatter coloured by condition + clicked-patch viewer + selected-patch grid. Ugly is fine. |
 | 2–3 | PLIP text prompts → interpretable axes + text-guided reweighting. Reject-and-resample loop. |
 | 3–3.5 | Per-patch justification, coverage table, brain-context slice. |

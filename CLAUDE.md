@@ -85,17 +85,19 @@ The sprint is split four ways. `TEAM_PLAN.md` is the authoritative per-person sp
 ### Selection / diversity scoring (Christos)
 
 - No file yet — will likely land as `selection.py` at repo root, or under a `christos/` subdir.
-- Inputs: filtered embeddings (post Jesko quality filter) + metadata.
+- Inputs: all embeddings + metadata (Jesko's c-Fos activity columns already merged in by `load_embeddings()`). No filtering happens upstream.
 - Expected contract: `select(embeddings, n, method="typiclust") -> (selected_idx, scores, justifications)` plus a `reject(idx)` hook for the UI.
 - **Cosine sim, not Euclidean** — embeddings are L2-normalised. Don't use `sklearn.cluster.KMeans` directly without normalising or switching to `SphericalKMeans` / cosine-based variants.
 - The headline result is **leave-one-brain-out coverage**: train selection on 11 brains, measure max-min distance to held-out brain. Build this eval harness early — it's the killer slide.
 - Watch out for tiny-cluster starvation: 50 picks across 12 brains ≈ 4 per brain; stratification on `condition` (G001 / G002) matters.
 
-### Quality filter / nuclei segmentation (Jesko)
+### c-Fos puncta segmentation (Jesko)
 
-- `jesko/segmentation.py` is already implemented: white top-hat → Otsu threshold → component classification by area + eccentricity + solidity. Produces `n_nuclei`, `n_artifacts`, `nucleus_score`. See `score_row(patch_u16)` for the per-patch entry point.
-- Thresholds (`TOPHAT_R=5`, `MIN_NUC=2`, `MAX_NUC=30`, ...) are tuned for **5 µm/vox**, ~10–15 µm nuclei (= 3–10 px area). Spot-check before bulk-running but don't drift far without a reason.
-- Expected contract: `quality_df` (DataFrame, aligned with embeddings/metadata) with per-patch counts (`n_nuclei`, `n_artifacts`, `nucleus_area_frac`, ...) plus `quality_score` (continuous in `[0, 1]`, log-rescaled `n_nuclei` anchored at the 95th percentile). The continuous score is consumed by Christos (selection weighting) and Meds (justification panel). **No `keep_mask` / binary rejection** — every patch stays in the dataset; downstream code weights by `quality_score` instead of dropping rows. Strong G001/G002 imbalance in `n_nuclei` distribution is still a useful red flag for a biased filter, even though nothing is rejected.
+We detect bright punctate signal corresponding to **c-Fos-positive** (active) nuclei. *Absence* of signal is biologically meaningful (inactive region), not "bad" data — counts are supplementary information, never a filter.
+
+- `jesko/segmentation.py` is already implemented: hybrid two-detector pipeline. **c-Fos+ puncta** via LoG blob detection (`skimage.feature.blob_log`, sigma 1–3, threshold 0.01) — multi-scale, intensity-robust to blur. **Artifacts** (long lines, fiber tracts) via white top-hat → Otsu → eccentricity + size cap. Produces `n_cfos_puncta`, `n_artifacts`, `cfos_purity`. See `score_row(patch_u16)` for the per-patch entry point.
+- LoG parameters (`LOG_MIN_SIGMA=1`, `LOG_MAX_SIGMA=3`, `LOG_THRESHOLD=0.01`) are tuned for **5 µm/vox**, ~10–15 µm c-Fos+ nuclei (radius ≈ 1.4–4.2 px). Top-hat artifact parameters (`TOPHAT_R=5`, `THR_FACTOR=0.5`, `LINE_AREA=12`, `ECC_ART=0.92`) catch long fiber-tract / edge structures. Spot-check the dashboard overlay before changing.
+- Expected contract: `segmentation_df` (DataFrame, aligned with embeddings/metadata) with per-patch counts (`n_cfos_puncta`, `n_artifacts`, `cfos_area_frac`, ...) plus `cfos_activity_score` (continuous in `[0, 1]`, log-rescaled `n_cfos_puncta` anchored at the 95th percentile). The continuous score is consumed by Christos (selection weighting) and Meds (justification panel). **No `keep_mask` / binary rejection** — every patch stays in the dataset; downstream code weights by `cfos_activity_score` instead of dropping rows. Strong G001/G002 imbalance in `n_cfos_puncta` distribution is still a useful red flag for a biased filter, even though nothing is rejected.
 - Bulk scoring ~7,500 patches × ~50 ms ≈ 6 min single-threaded — parallelise with `joblib` if it pushes past that.
 
 ### Natural language / PLIP text prompts (Nick)

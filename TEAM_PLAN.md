@@ -20,7 +20,7 @@ This is the per-person task split. For the *why* behind the overall approach see
   │ (quality     │──▶│ (text-prompt │──▶│  (Streamlit  │
   │  filter)     │   │  semantics)  │   │   UI / UX)   │
   └──────────────┘   └──────────────┘   └──────────────┘
-   quality_score      per-patch          everything the
+   cfos_activity_score      per-patch          everything the
    per patch          prompt scores      judges actually see
 ```
 
@@ -30,7 +30,7 @@ The whole point: **filter → score-and-select → explain → demo**. Each work
 
 ## Christos — Diversity scoring & selection
 
-**Goal:** Given the 512-d PLIP embeddings of all patches (with Jesko's `quality_score` attached as a per-patch weight), produce (a) one or more diversity *scores* we can put on screen and (b) the *selection* algorithm that picks the final N patches.
+**Goal:** Given the 512-d PLIP embeddings of all patches (with Jesko's `cfos_activity_score` attached as a per-patch weight), produce (a) one or more diversity *scores* we can put on screen and (b) the *selection* algorithm that picks the final N patches.
 
 **Why it matters:** This is the methodological core. Diversity scoring is also what powers the killer slide — "our 50 picks cover a held-out brain better than random or k-means picks 500".
 
@@ -54,7 +54,7 @@ The whole point: **filter → score-and-select → explain → demo**. Each work
 
 **Inputs:**
 - `embeddings: (N, 512) float32, L2-normalized` — all 7,264 patches (no rejection happens upstream)
-- `metadata: pandas DataFrame` — `scan_name`, `condition`, `z0/y0/x0`, `z_mid_absolute`, plus Jesko's quality columns (`n_nuclei`, `quality_score`, ...) already merged in by `load_embeddings()`
+- `metadata: pandas DataFrame` — `scan_name`, `condition`, `z0/y0/x0`, `z_mid_absolute`, plus Jesko's c-Fos columns (`n_cfos_puncta`, `cfos_activity_score`, ...) already merged in by `load_embeddings()`
 
 **Outputs (the contract):**
 ```python
@@ -70,45 +70,45 @@ per_patch_justification: list[str]  # length N, one short sentence each
 - Cosine sim, not Euclidean — embeddings are L2-normalized.
 
 **Watch out:**
-- Vanilla farthest-point sampling will happily pick artifacts at the embedding-space periphery. Weight by `quality_score` (or sample probabilities ∝ `quality_score`) so low-quality patches get downranked without being dropped — patches are *never* removed from the dataset.
+- Vanilla farthest-point sampling will happily pick artifacts at the embedding-space periphery. Weight by `cfos_activity_score` (or sample probabilities ∝ `cfos_activity_score`) so low-quality patches get downranked without being dropped — patches are *never* removed from the dataset.
 - 50 picks across 12 brains ≈ ~4 per brain. If Typiclust starves a brain entirely, surface that — may want condition-stratified selection.
 
 ---
 
-## Jesko — Quality filter / nuclei segmentation
+## Jesko — c-Fos puncta segmentation
 
-**Goal:** Continuous per-patch `quality_score` (in `[0, 1]`) plus interpretable count features (`n_nuclei`, `n_artifacts`, ...) that downstream consumers can *weight by*. **Every patch stays in the dataset — no binary rejection, no `keep_mask`.**
+**Goal:** Continuous per-patch `cfos_activity_score` (in `[0, 1]`) plus interpretable count features (`n_cfos_puncta`, `n_artifacts`, ...) that downstream consumers can *weight by*. **Every patch stays in the dataset — no binary rejection, no `keep_mask`.**
 
 **Why it matters:** Diversity samplers naively select artifacts at the embedding-space periphery. A continuous quality signal lets Christos downweight those without throwing them away, lets Meds explain *why* each pick was favoured, and keeps the held-out-brain coverage story honest (you can't compare coverage if half the dataset is gone).
 
-**Current state:** `jesko/segmentation.py` already implements a classical nuclei segmenter — white top-hat → Otsu (× `THR_FACTOR=0.5`) → component classification by area + eccentricity + solidity. Produces `n_nuclei`, `n_artifacts`, `nucleus_area_frac` per patch. `data.compute_quality()` runs it across all 12 brains in parallel (~40 s on 10 cores) and caches at `cache/quality.parquet`. `load_embeddings()` auto-merges the quality columns into the metadata DataFrame.
+**Current state:** `jesko/segmentation.py` ships a hybrid two-detector pipeline. **c-Fos+ puncta** via LoG blob detection (`skimage.feature.blob_log`, sigma 1–3, threshold 0.01) — multi-scale, intensity-robust to blur. **Artifacts** (long lines, fiber tracts) via white top-hat → Otsu → eccentricity + size cap. Produces `n_cfos_puncta`, `n_artifacts`, `cfos_area_frac`, `cfos_purity` per patch. `data.compute_segmentation()` runs it across all 12 brains in parallel (~50 s on 10 cores) and caches at `cache/segmentation.parquet`. `load_embeddings()` auto-merges the c-Fos columns into the metadata DataFrame.
 
 **What remains:**
 
-1. **Verify the cache is current.** If thresholds in `segmentation.py` change, run `compute_quality(refresh=True)` to rebuild. ~40 s parallel.
+1. **Verify the cache is current.** If thresholds in `segmentation.py` change, run `compute_segmentation(refresh=True)` to rebuild. ~40 s parallel.
 
-2. **`quality_score` definition.** Already implemented: log-rescaled `n_nuclei` anchored so the 95th-percentile count maps to 1.0. Median ≈ 0.66 on the current data; min 0, max 1. Computed inside `compute_quality()`.
+2. **`cfos_activity_score` definition.** Already implemented: log-rescaled `n_cfos_puncta` anchored so the 95th-percentile count maps to 1.0. Median ≈ 0.66 on the current data; min 0, max 1. Computed inside `compute_segmentation()`.
 
-3. **Sanity check** — colour the dashboard PCA by `quality_score` and confirm low-score patches visibly look worse than high-score ones. Pull side-by-side samples at low / medium / high `quality_score` (e.g. 10th / 50th / 90th percentile) for the demo grid. Per-condition `n_nuclei` distribution should be roughly balanced across G001 vs G002 — a heavy skew means the segmenter is condition-biased.
+3. **Sanity check** — colour the dashboard PCA by `cfos_activity_score` and confirm low-score patches visibly look worse than high-score ones. Pull side-by-side samples at low / medium / high `cfos_activity_score` (e.g. 10th / 50th / 90th percentile) for the demo grid. Per-condition `n_cfos_puncta` distribution should be roughly balanced across G001 vs G002 — a heavy skew means the segmenter is condition-biased.
 
 **Outputs (the contract):**
 ```python
-quality_df: pd.DataFrame   # rows aligned with embeddings/metadata, columns:
-                           # n_nuclei, n_artifacts, nucleus_score,
-                           # nucleus_area_frac, artifact_area_frac,
-                           # quality_score (continuous, [0,1])
-quality_score: np.ndarray  # (N_total,) float in [0,1] — continuous signal
+segmentation_df: pd.DataFrame   # rows aligned with embeddings/metadata, columns:
+                           # n_cfos_puncta, n_artifacts, cfos_purity,
+                           # cfos_area_frac, artifact_area_frac,
+                           # cfos_activity_score (continuous, [0,1])
+cfos_activity_score: np.ndarray  # (N_total,) float in [0,1] — continuous signal
                            # for downstream weighting / display
 ```
 
 **Definition of done:**
-- `quality_df` cached and loadable via `data.load_embeddings()` (auto-merges quality columns into metadata).
-- A 2-by-N grid of low-vs-medium-vs-high `quality_score` sample patches saved for the demo (Meds can drop it in).
-- Per-condition `n_nuclei` median roughly equal across G001 vs G002.
+- `segmentation_df` cached and loadable via `data.load_embeddings()` (auto-merges c-Fos columns into metadata).
+- A 2-by-N grid of low-vs-medium-vs-high `cfos_activity_score` sample patches saved for the demo (Meds can drop it in).
+- Per-condition `n_cfos_puncta` median roughly equal across G001 vs G002.
 
 **Watch out:**
-- The current thresholds in `segmentation.py` are tuned for 5 µm/vox and ~10–15 µm nuclei. Spot-check before bulk-running. `THR_FACTOR` (Otsu multiplier, currently 0.5) is the main sensitivity dial — lower = more nuclei detected, higher = stricter.
-- Never produce a `keep_mask`. Patches with `quality_score == 0` are still kept; consumers weight them down rather than dropping them.
+- LoG and top-hat thresholds in `segmentation.py` are tuned for 5 µm/vox, ~10–15 µm c-Fos+ nuclei. Spot-check the dashboard overlay before changing. `LOG_THRESHOLD` (currently 0.01) is the main blob-detection sensitivity dial — lower = catches more dim puncta, higher = stricter.
+- Never produce a `keep_mask`. Patches with `cfos_activity_score == 0` are still kept; consumers weight them down rather than dropping them.
 
 ---
 
@@ -163,7 +163,7 @@ def search_by_text(query: str, k: int = 50) -> np.ndarray:
 
 **Watch out:**
 - Don't fine-tune anything. The model loads offline; just embed and score.
-- Negative prompts (`"out of focus"`) double as a sanity check on the quality filter — high prompt score here should correlate with low `quality_score` from Jesko.
+- Negative prompts (`"out of focus"`) double as a sanity check — high prompt score for "out of focus" should correlate with high `n_artifacts` from Jesko. (Do *not* expect correlation with low `cfos_activity_score` — a patch with no c-Fos signal is biologically inactive, not technically bad.)
 
 ---
 
@@ -191,9 +191,9 @@ def search_by_text(query: str, k: int = 50) -> np.ndarray:
 **Inputs (the contract — what every other person hands you):**
 ```python
 # From Jesko:
-quality_df: pd.DataFrame   # auto-merged into metadata by data.load_embeddings()
-                            # columns include: n_nuclei, n_artifacts, quality_score
-# (no keep_mask — every patch stays; weight by quality_score, don't filter)
+segmentation_df: pd.DataFrame   # auto-merged into metadata by data.load_embeddings()
+                            # columns include: n_cfos_puncta, n_artifacts, cfos_activity_score
+# (no keep_mask — every patch stays; weight by cfos_activity_score, don't filter)
 
 # From Christos:
 selected_idx: np.ndarray
@@ -227,8 +227,8 @@ This is the single source of truth for how the four streams plug together. **If 
 |---------------------|-------------------------------------|-------------|---------------------|
 | `embeddings`        | `(N, 512) float32`, L2-normalized   | bucket      | Christos, Nick      |
 | `metadata`          | `pd.DataFrame`                      | bucket      | everyone            |
-| `quality_df`        | `pd.DataFrame` (`n_nuclei`, `n_artifacts`, `nucleus_area_frac`, `quality_score`, ...) | Jesko | Christos, Meds      |
-| `quality_score`     | `(N,) float in [0,1]`               | Jesko       | Christos, Meds      |
+| `segmentation_df`        | `pd.DataFrame` (`n_cfos_puncta`, `n_artifacts`, `cfos_area_frac`, `cfos_activity_score`, ...) | Jesko | Christos, Meds      |
+| `cfos_activity_score`     | `(N,) float in [0,1]`               | Jesko       | Christos, Meds      |
 | `selected_idx`      | `(K,) int`                          | Christos    | Meds                |
 | `scores`            | `dict[str, float]`                  | Christos    | Meds                |
 | `justifications`    | `list[str]`, length K               | Christos    | Meds                |
@@ -236,7 +236,7 @@ This is the single source of truth for how the four streams plug together. **If 
 | `top_tags`          | `list[str]`, length N               | Nick        | Meds                |
 | `search_by_text`    | `Callable[[str, int], np.ndarray]`  | Nick        | Meds                |
 
-All index spaces are aligned: row `i` of `embeddings`, `metadata`, `quality_df`, `prompt_scores[:, i]`, `top_tags[i]` is the same patch.
+All index spaces are aligned: row `i` of `embeddings`, `metadata`, `segmentation_df`, `prompt_scores[:, i]`, `top_tags[i]` is the same patch.
 
 ---
 
@@ -247,7 +247,7 @@ Working ugly end-to-end by hour 2. Polish after.
 | Hour    | Christos                                | Jesko                               | Nick                                  | Meds                                       |
 |---------|------------------------------------------|--------------------------------------|----------------------------------------|---------------------------------------------|
 | 0–1     | Typiclust skeleton on a single brain    | Bulk-score all 12 brains             | Prompt set v1, sanity-check on 200 patches | Skeleton Streamlit: UMAP + patch viewer    |
-| 1–2     | Run across all 12, expose `select(...)` | `quality_score` finalised, sanity grid | Full prompt scoring + `top_tags`     | Selection grid + condition colouring        |
+| 1–2     | Run across all 12, expose `select(...)` | `cfos_activity_score` finalised, sanity grid | Full prompt scoring + `top_tags`     | Selection grid + condition colouring        |
 | 2–3     | Coverage scores, `reject(idx)` hook     | Optional: alt quality features (e.g. embedding-density bonus) | `search_by_text`, demo queries chosen  | Justification panel + reject-and-resample  |
 | 3–3.5   | Held-out-brain table                    | Help wherever                        | Help wherever                          | Brain-context slice + text search box       |
 | 3.5–4   | Polish numbers slide                    | Polish quality slide                 | Polish demo queries                    | Demo rehearsal                              |
