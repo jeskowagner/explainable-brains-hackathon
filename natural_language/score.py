@@ -24,7 +24,9 @@ def score_prompts(
         text=prompt_names, return_tensors="pt", padding=True, truncation=True
     )
     with torch.no_grad():
-        txt = model.get_text_features(**inputs)
+        txt_out = model.get_text_features(**inputs)
+    # transformers >=5 wraps the tensor in BaseModelOutputWithPooling.
+    txt = txt_out.pooler_output if hasattr(txt_out, "pooler_output") else txt_out
     # MUST normalize text features (see CONTEXT.md hard rule #4).
     txt = txt / txt.norm(dim=-1, keepdim=True)
 
