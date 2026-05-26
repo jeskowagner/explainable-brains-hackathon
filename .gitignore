@@ -8,7 +8,7 @@ bucket_access/config.py
 *.nii.gz
 *.csv
 
-# local data cache (per-session, never committed)
+# local bucket cache populated by jesko/data.py:cache_all_brains()
 cache/
 
 # Byte-compiled / optimized / DLL files
